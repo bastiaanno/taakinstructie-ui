@@ -8,6 +8,9 @@ export default function Home() {
 
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [delimiter, setDelimiter] = useState<string>(";");
+  const [nameColumn, setNameColumn] = useState<string>("name");
+  const [pagesColumn, setPagesColumn] = useState<string>("pages");
 
   const handleCsvChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setCsvFile(e.target.files?.[0] || null);
@@ -28,6 +31,9 @@ export default function Home() {
     const formData = new FormData();
     formData.append("csvData", csvFile);
     formData.append("pdfData", pdfFile);
+    formData.append("delimiter", delimiter);
+    formData.append("nameColumn", nameColumn);
+    formData.append("pagesColumn", pagesColumn);
 
     const res = await fetch("/api/generate", {
       method: "POST",
@@ -57,8 +63,8 @@ export default function Home() {
   };
 
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
+    <div className="flex flex-col items-center justify-between min-h-screen p-8 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
+      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
         <h1 className="text-4xl sm:text-5xl font-bold text-center sm:text-left">
           Taakinstructiedocument generator
         </h1>
@@ -72,6 +78,39 @@ export default function Home() {
             className="file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
           />
         </label>
+        <div className="flex flex-col gap-2 w-full max-w-md">
+          <span className="font-medium">CSV-scheidingsteken</span>
+          <select
+            value={delimiter}
+            onChange={(e) => setDelimiter(e.target.value)}
+            className="border border-gray-300 rounded px-3 py-2 text-sm"
+          >
+            <option value=";">Puntkomma ( ; )</option>
+            <option value=",">Komma ( , )</option>
+            <option value="\t">Tab</option>
+            <option value="|">Pipe ( | )</option>
+          </select>
+        </div>
+        <div className="flex gap-4 w-full max-w-md">
+          <label className="flex flex-col gap-2 flex-1">
+            <span className="font-medium">Naamkolom</span>
+            <input
+              type="text"
+              value={nameColumn}
+              onChange={(e) => setNameColumn(e.target.value)}
+              className="border border-gray-300 rounded px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-2 flex-1">
+            <span className="font-medium">Paginakolom</span>
+            <input
+              type="text"
+              value={pagesColumn}
+              onChange={(e) => setPagesColumn(e.target.value)}
+              className="border border-gray-300 rounded px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
         <label className="flex flex-col gap-2 w-full max-w-md">
           <span className="font-medium">Upload pdf</span>
           <input
@@ -95,7 +134,7 @@ export default function Home() {
           </pre>
         )}
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
+      <footer className="flex flex-row flex-wrap items-center justify-center">
         <a
           className="flex items-center gap-2 hover:underline hover:underline-offset-4"
           href="https://bnws.nl"
