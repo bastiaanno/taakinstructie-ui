@@ -77,7 +77,9 @@ export default function Home() {
       const a = document.createElement("a");
       a.href = url;
       a.download =
-        outputMode === "eml" ? "taakinstructies-eml.zip" : "taakinstructies.zip";
+        outputMode === "eml"
+          ? "taakinstructies-eml.zip"
+          : "taakinstructies.zip";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -186,7 +188,9 @@ export default function Home() {
           />
         </label>
         <label className="flex flex-col gap-2 w-full max-w-md">
-          <span className="font-medium">Algemene bijlagen (voor elke mail)</span>
+          <span className="font-medium">
+            Algemene bijlagen (voor elke mail)
+          </span>
           <input
             type="file"
             multiple
