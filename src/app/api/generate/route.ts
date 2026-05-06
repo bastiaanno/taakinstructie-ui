@@ -5,6 +5,81 @@ import { extractPages, layoutFourPerSheet } from "taakinstructies";
 
 export const runtime = "nodejs";
 
+const applyTemplate = (
+  template: string,
+  values: Record<string, string>,
+): string =>
+  template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
+    const value = values[key];
+    return value ?? "";
+  });
+
+const wrapBase64 = (input: string): string => {
+  const chunkSize = 76;
+  let out = "";
+  for (let i = 0; i < input.length; i += chunkSize) {
+    out += `${input.slice(i, i + chunkSize)}\r\n`;
+  }
+  return out.trimEnd();
+};
+
+const encodeHeaderValue = (value: string): string => {
+  if (/^[\x20-\x7E]*$/.test(value)) {
+    return value;
+  }
+  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+};
+
+const toEml = (params: {
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  attachments: Array<{
+    filename: string;
+    bytes: Uint8Array;
+    contentType: string;
+  }>;
+}): string => {
+  const boundary = `----=_Part_${Math.random().toString(36).slice(2)}`;
+  const body = params.body.replace(/\r?\n/g, "\r\n");
+  const attachmentParts = params.attachments.flatMap((attachment) => {
+    const attachmentBase64 = wrapBase64(
+      Buffer.from(attachment.bytes).toString("base64"),
+    );
+    const safeAttachmentFilename = attachment.filename.replace(/"/g, "");
+    const safeContentType =
+      attachment.contentType || "application/octet-stream";
+
+    return [
+      `--${boundary}`,
+      `Content-Type: ${safeContentType}; name="${safeAttachmentFilename}"`,
+      "Content-Transfer-Encoding: base64",
+      `Content-Disposition: attachment; filename="${safeAttachmentFilename}"`,
+      "",
+      attachmentBase64,
+    ];
+  });
+
+  return [
+    `From: ${params.from}`,
+    `To: ${params.to}`,
+    `Subject: ${encodeHeaderValue(params.subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary=\"${boundary}\"`,
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=\"utf-8\"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    body,
+    "",
+    ...attachmentParts,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+};
+
 export async function POST(request: Request) {
   let formData: FormData;
   try {
@@ -26,6 +101,20 @@ export async function POST(request: Request) {
   const delimiter = (formData.get("delimiter") as string | null) ?? ";";
   const nameColumn = (formData.get("nameColumn") as string | null) ?? "name";
   const pagesColumn = (formData.get("pagesColumn") as string | null) ?? "pages";
+  const emailColumn = (formData.get("emailColumn") as string | null) ?? "email";
+  const outputMode = (formData.get("outputMode") as string | null) ?? "zip";
+  const fromAddress =
+    (formData.get("fromAddress") as string | null) ??
+    "noreply@taakinstructie.local";
+  const mailSubjectTemplate =
+    (formData.get("mailSubjectTemplate") as string | null) ??
+    "Taakinstructie voor {{name}}";
+  const mailBodyTemplate =
+    (formData.get("mailBodyTemplate") as string | null) ??
+    "Beste {{name}},\n\nIn de bijlage vind je je taakinstructie.\n\nMet vriendelijke groet,";
+  const commonAttachments = formData
+    .getAll("commonAttachments")
+    .filter((file): file is File => file instanceof File);
 
   const csvData = await csvFile.text();
 
@@ -69,6 +158,7 @@ export async function POST(request: Request) {
   const laidOutPDFsWithNames = await Promise.all(
     records.map(async (row) => {
       const name = resolveColumn(row, nameColumn);
+      const email = resolveColumn(row, emailColumn);
       const numbers = resolveColumn(row, pagesColumn)
         .split(/[,;\s]+/)
         .map((s: string) => parseInt(s.trim(), 10))
@@ -77,10 +167,74 @@ export async function POST(request: Request) {
       const extracted = await extractPages(pdfBuffer, numbers);
       const laidOut = await layoutFourPerSheet(extracted, name);
       const outBytes = await laidOut.save();
-      console.log(`Processed ${name} with pages ${numbers.join(", ")}`);
-      return { outBytes, name };
+      return { outBytes, name, email };
     }),
   );
+
+  if (outputMode === "eml") {
+    const commonAttachmentData = await Promise.all(
+      commonAttachments.map(async (file) => ({
+        filename: file.name,
+        bytes: new Uint8Array(await file.arrayBuffer()),
+        contentType: file.type || "application/octet-stream",
+      })),
+    );
+
+    const withEmails = laidOutPDFsWithNames.filter(({ email }) =>
+      Boolean(email),
+    );
+    const skipped = laidOutPDFsWithNames
+      .filter(({ email }) => !email)
+      .map(({ name }) => name || "(zonder naam)");
+
+    if (withEmails.length === 0) {
+      return Response.json(
+        { error: "Geen records met e-mailadres gevonden." },
+        { status: 400 },
+      );
+    }
+
+    const emlZip = new JSZip();
+    withEmails.forEach(({ outBytes, name, email }, idx) => {
+      const safeName = name.replace(/[^a-z0-9_\-]/gi, " ").trim();
+      const attachmentFilename = `${idx + 1} ${safeName || "file"}.pdf`;
+      const emlFilename = `${idx + 1} ${safeName || "mail"}.eml`;
+      const subject = applyTemplate(mailSubjectTemplate, { name, email });
+      const body = applyTemplate(mailBodyTemplate, { name, email });
+      const eml = toEml({
+        from: fromAddress,
+        to: email,
+        subject,
+        body,
+        attachments: [
+          {
+            filename: attachmentFilename,
+            bytes: outBytes,
+            contentType: "application/pdf",
+          },
+          ...commonAttachmentData,
+        ],
+      });
+      emlZip.file(emlFilename, eml);
+    });
+
+    if (skipped.length > 0) {
+      emlZip.file(
+        "overgeslagen-zonder-email.txt",
+        skipped.map((name) => `- ${name}`).join("\n"),
+      );
+    }
+
+    const emlZipContent = await emlZip.generateAsync({ type: "nodebuffer" });
+
+    return new Response(emlZipContent as BodyInit, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": "attachment; filename=taakinstructies-eml.zip",
+      },
+    });
+  }
 
   const mergedPdf = await PDFDocument.create();
   const loadedPdfs = await Promise.all(
@@ -103,7 +257,7 @@ export async function POST(request: Request) {
 
   const zipContent = await zip.generateAsync({ type: "nodebuffer" });
 
-  return new Response(zipContent, {
+  return new Response(zipContent as BodyInit, {
     status: 200,
     headers: {
       "Content-Type": "application/zip",
